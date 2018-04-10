@@ -28,17 +28,23 @@ class Input {
   }
 
   void scan() {
-    for(int i = 0; i < MAX_INPUT_PINS && pins_[i] != -1; ++i) {
-      int val = io_->digitalRead(pins_[i]); 
-      if (val != last_[i]) {
-        edge(i, val);
-        last_[i] = val;
-      }
-    }
+    bool changed_pins[] = {false, false};
+    int val = io_->digitalRead(pins_[0]);
+    changed_pins[0] = val != last_[0];
+    last_[0] = val;
+ 
+    val = io_->digitalRead(pins_[1]);
+    changed_pins[1] = val != last_[1];
+    last_[1] = val;
+
+    changed_pins[0] ? edge(0, last_[0]) : repeat(0, last_[0]);
+    changed_pins[1] ? edge(1, last_[1]) : repeat(1, last_[1]);
   }
 
-  virtual void edge(int pin, int val) = 0;
- private:
+  virtual void edge(int pin, int val) {};
+
+  virtual void repeat(int pin, int val) {}
+ protected:
   SX1509 * io_;
   int pins_[MAX_INPUT_PINS];
   int last_[MAX_INPUT_PINS];
@@ -52,12 +58,66 @@ class Button : public Input {
   }
 
   virtual void edge(int pin, int val) {
-    if (val == LOW) {
+    if (val == HIGH) {
       Serial.println(command_);
     }
   }
  private:
   const char *command_;
+};
+
+class HoldButton : public Input {
+ public:
+  HoldButton(int pin, int hold_time_ms, const char *edge_command, const char *hold_command) :
+      Input(pin, -1),
+      hold_time_ms_(hold_time_ms),
+      low_edge_time_ms_(-1),
+      edge_command_(edge_command),
+      hold_command_(hold_command) {     
+  }
+
+  virtual void edge(int pin, int val) {
+    if (val == HIGH) {
+      low_edge_time_ms_ = -1;
+      Serial.println(edge_command_);
+    } else {
+      low_edge_time_ms_ = millis();
+    }
+  }
+
+  virtual void repeat(int pin, int val) {
+    if (val == LOW && low_edge_time_ms_ > 0 && millis() - low_edge_time_ms_ >= hold_time_ms_) {
+      low_edge_time_ms_ = -1;
+      Serial.println(hold_command_);
+    }
+  }
+
+ private:
+  int hold_time_ms_;
+  int low_edge_time_ms_;
+  const char *edge_command_;
+  const char *hold_command_;
+};
+
+class Encoder : public Input {
+ public:
+  Encoder(int pin_a, int pin_b, const char *left_command, const char *right_command) :
+      Input(pin_a, pin_b),
+      left_command_(left_command),
+      right_command_(right_command) {}
+
+  virtual void edge(int pin, int val) {
+    if (last_[0] == last_[1]) return;
+    if (pin == 0) {
+      Serial.println(left_command_);
+    } else {
+      Serial.println(right_command_);
+    }
+  }
+
+ private:
+  const char *left_command_;
+  const char *right_command_;
 };
 
 class Expander {
@@ -99,9 +159,26 @@ void setup()
      new Button(2, "RNG_UP"),
      new Button(3, "RNG_DN"),
      new Button(4, "DIRECT"),
-     new Button(5, "CLR"),
+     new HoldButton(5, 1000, "CLR", "CLR_HOLD"),
+     new Button(6, "COM_TRANS"),
+     new Button(7, "COM_TRANS"),
+     new Button(8, "CDI"),
+     new Button(9, "OBS"),
+     new Button(10, "MSG"),
+     new Button(11, "FPL"),
+     new Button(12, "PROC"),
   };
-  expanders[0] = new Expander(0x3E, inputs_0, 6);
+  expanders[0] = new Expander(0x3E, inputs_0, 13);
+
+  Input* inputs_1[] = {
+     new Encoder(0, 1, "FREQ_LARGE_DECR", "FREQ_LARGE_INCR"),
+     new Encoder(2, 3, "FREQ_SMALL_DECR", "FREQ_SMALL_INCR"),
+     new Button(4, "FREQ_PUSH"),
+     new Encoder(5, 6, "FMS_LARGE_DECR", "FMS_LARGE_INCR"),
+     new Encoder(7, 8, "FMS_SMALL_DECR", "FMS_SMALL_INCR"),
+     new Button(9, "FMS_PUSH"),
+  };
+  expanders[1] = new Expander(0x3F, inputs_1, 6);
 }
 
 void loop() 
