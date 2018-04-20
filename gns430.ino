@@ -33,9 +33,7 @@ class Input {
 
   virtual void edge(unsigned int changed_pins) = 0;
 
-  //virtual void repeat(int pin, int val) {}
-
-  virtual byte edge_trigger_mode() {return FALLING;}
+  virtual byte edge_trigger_mode() {return RISING;}
 
   const unsigned int pin_0_mask_;
   const unsigned int pin_1_mask_;
@@ -61,29 +59,39 @@ class Button : public Input {
   const char *command_;
 };
 
-#if 0
+
 class HoldButton : public Input {
  public:
   HoldButton(int pin, int hold_time_ms, const char *edge_command, const char *hold_command) :
       Input(pin, -1),
       hold_time_ms_(hold_time_ms),
+      hold_triggered_(false),
       low_edge_time_ms_(-1),
       edge_command_(edge_command),
       hold_command_(hold_command) {     
   }
 
-  virtual void edge(int pin, int val) {
-    if (val == HIGH) {
+  virtual void edge(unsigned int changed_pins) {
+    if (io_->digitalRead(pins_[0]) == HIGH) {
+      if (!hold_triggered_) {
+        Serial.println(edge_command_);
+      }
       low_edge_time_ms_ = -1;
-      Serial.println(edge_command_);
+      hold_triggered_ = false;
     } else {
       low_edge_time_ms_ = millis();
+      hold_triggered_ = false;
     }
   }
 
-  virtual void repeat(int pin, int val) {
-    if (val == LOW && low_edge_time_ms_ > 0 && millis() - low_edge_time_ms_ >= hold_time_ms_) {
-      low_edge_time_ms_ = -1;
+  virtual byte edge_trigger_mode() { return CHANGE; }
+
+  void scan() {
+    if ( low_edge_time_ms_ == -1 || hold_triggered_) {
+      return;
+    }
+    if (millis() - low_edge_time_ms_ >= hold_time_ms_) {
+      hold_triggered_ = true;
       Serial.println(hold_command_);
     }
   }
@@ -91,10 +99,11 @@ class HoldButton : public Input {
  private:
   int hold_time_ms_;
   int low_edge_time_ms_;
+  bool hold_triggered_;
   const char *edge_command_;
   const char *hold_command_;
 };
-#endif
+
 
 class Encoder : public Input {
  public:
@@ -213,6 +222,8 @@ void isr_1() {
   expanders[1]->set_interrupt();
 }
 
+HoldButton* clear_button = new HoldButton(5, 1000, "CLR", "CLR_HOLD");
+
 void setup() 
 {
   Serial.begin(9600);
@@ -223,8 +234,7 @@ void setup()
      new Button(2, "RNG_UP"),
      new Button(3, "RNG_DN"),
      new Button(4, "DIRECT"),
-     //new HoldButton(5, 1000, "CLR", "CLR_HOLD"),
-     new Button(5, "CLR"),
+     new HoldButton(5, 1000, "CLR", "CLR_HOLD"),
      new Button(6, "COM_TRANS"),
      new Button(7, "COM_TRANS"),
      new Button(8, "CDI"),
@@ -253,4 +263,5 @@ void loop()
   for(int i = 0; i < EXPANDER_COUNT; ++i) {
     expanders[i]->scan();
   }
+  clear_button->scan();
 }
