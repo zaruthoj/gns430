@@ -1,10 +1,11 @@
 #include <Wire.h>
 #include <SparkFunSX1509.h>
 
-#define EXPANDER_COUNT 2
+#define EXPANDER_COUNT 1
 
 #define MAX_INPUT_PINS 2
 #define MAX_INPUTS 16
+
 
 class Input {
  public:
@@ -23,6 +24,7 @@ class Input {
         io_->pinMode(pins_[i], INPUT_PULLUP);
         //io_->debouncePin(pins_[i]);
         //io_->debounceConfig(0);
+        io_->enableInterrupt(i, FALLING);
       }
     }
   }
@@ -132,9 +134,13 @@ class Encoder : public Input {
 
 class Expander {
  public:
-  Expander(const byte i2c_address, Input* inputs[], int num_inputs) :
+  Expander(const byte i2c_address, interrupt_pin, Input* inputs[], int num_inputs) :
       i2c_address_(i2c_address),
+      interrupt_pin_(interrupt_pin),
       num_inputs_(num_inputs < MAX_INPUTS ? num_inputs : MAX_INPUTS) {
+    pinMode(interrupt_pin_, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(interrupt_pin_), 
+                  button, FALLING);
     if (!io_.begin(i2c_address_))
     {
       Serial.print("Failed to init SX1509 at ");
@@ -154,67 +160,23 @@ class Expander {
   }
  private:
   const byte i2c_address_;
+  int interrupt_pin_;
   SX1509 io_;
   Input* inputs_[MAX_INPUTS];
   int num_inputs_;
 };
 
+void isr(Expander *expander) {
+  expander->set_interrupt();
+}
+
+
 Expander* expanders[EXPANDER_COUNT];
 
-SX1509 io;
-class TestEncoder {
-public:
-  TestEncoder(int pin_a, int pin_b) :
-      pin_a_(pin_a),
-      pin_b_(pin_b),
-      last_a_(HIGH),
-      last_b_(HIGH) {
-  }
+void isr_0() {
+  isr(expanders[0]);
+}
 
-  void scan() {
-    int val_a = io.digitalRead(pin_a_);
-    int val_b = io.digitalRead(pin_b_);
-    
-    
-    int pin = -1;
-    int val = HIGH;
-    if (val_a != last_a_) {
-      //Serial.print("A");
-      //Serial.println(val_a);
-      pin = pin_a_;
-      val = val_a;
-    } else if (val_b != last_b_) {
-      //Serial.print("B");
-      //Serial.println(val_b);  
-      pin = pin_b_;
-      val = val_b;
-    }
-    
-    last_a_ = val_a;
-    last_b_ = val_b;
-
-    if (pin == -1) {
-      return;
-    }
-    //Serial.println();
-    if (val_a == val_b) return;
-    if (pin == pin_a_) {
-      Serial.println("left");
-    } else {
-      Serial.println("right");
-    }
-  }
-
-protected:
-
-  int pin_a_;
-  int pin_b_;
-  int last_a_;
-  int last_b_;
-};
-
-
-TestEncoder encoder(0, 1);
 void setup() 
 {
   Serial.begin(9600);
@@ -235,7 +197,7 @@ void setup()
      new Button(12, "PROC"),
   };
   expanders[0] = new Expander(0x3E, inputs_0, 13);
-
+#endif
   Input* inputs_1[] = {
      new Encoder(0, 1, "FREQ_LARGE_DECR", "FREQ_LARGE_INCR"),
      new Encoder(2, 3, "FREQ_SMALL_DECR", "FREQ_SMALL_INCR"),
@@ -244,20 +206,13 @@ void setup()
      new Encoder(7, 8, "FMS_SMALL_DECR", "FMS_SMALL_INCR"),
      new Button(9, "FMS_PUSH"),
   };
-  expanders[1] = new Expander(0x3F, inputs_1, 6);
-#endif
-  
-  io.begin(0x3F);
-  io.pinMode(0, INPUT_PULLUP);
-  io.pinMode(1, INPUT_PULLUP);
+  expanders[0] = new Expander(0x3F, inputs_1, 6);
+
 }
 
 void loop() 
 {
-#if 0
   for(int i = 0; i < EXPANDER_COUNT; ++i) {
     expanders[i]->scan();
   }
-#endif
-  encoder.scan();
 }
