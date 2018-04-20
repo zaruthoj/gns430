@@ -9,7 +9,10 @@
 
 class Input {
  public:
-  Input(int pin_0, int pin_1) {
+  Input(int pin_0, int pin_1) :
+    pin_0_mask_(1 << pin_0),
+    pin_1_mask_(pin_1 > 0 ? 1 << pin_1 : 0),
+    pin_mask_(pin_0_mask_ | pin_1_mask_) {
     pins_[0] = pin_0;
     pins_[1] = pin_1;
     for (int i = 0; i < MAX_INPUT_PINS; ++i) {
@@ -22,38 +25,25 @@ class Input {
     for (int i = 0; i < MAX_INPUT_PINS; ++i) {
       if (pins_[i] != -1) {
         io_->pinMode(pins_[i], INPUT_PULLUP);
-        //io_->debouncePin(pins_[i]);
-        //io_->debounceConfig(0);
-        io_->enableInterrupt(i, FALLING);
+        io_->debouncePin(pins_[i]);
+        io_->enableInterrupt(pins_[i], edge_trigger_mode());
       }
     }
   }
 
-  void scan() {
-    bool changed_pins[] = {false, false};
-    int val;
-    if (pins_[0] > 0) {
-      val = io_->digitalRead(pins_[0]);
-      changed_pins[0] = val != last_[0];
-      last_[0] = val;
-    }
+  virtual void edge(unsigned int changed_pins) = 0;
 
-    if (pins_[1] > 0) {
-      val = io_->digitalRead(pins_[1]);
-      changed_pins[1] = val != last_[1];
-      last_[1] = val;
-    }
+  //virtual void repeat(int pin, int val) {}
 
-    changed_pins[0] ? edge(0, last_[0]) : repeat(0, last_[0]);
-    changed_pins[1] ? edge(1, last_[1]) : repeat(1, last_[1]);
-  }
+  virtual byte edge_trigger_mode() {return FALLING;}
 
-  virtual void edge(int pin, int val) {};
+  const unsigned int pin_0_mask_;
+  const unsigned int pin_1_mask_;
+  const unsigned int pin_mask_;
+  int pins_[MAX_INPUT_PINS];
 
-  virtual void repeat(int pin, int val) {}
  protected:
   SX1509 * io_;
-  int pins_[MAX_INPUT_PINS];
   int last_[MAX_INPUT_PINS];
 };
 
@@ -64,15 +54,14 @@ class Button : public Input {
       command_(command) {     
   }
 
-  virtual void edge(int pin, int val) {
-    if (val == HIGH) {
-      Serial.println(command_);
-    }
+  virtual void edge(unsigned int changed_pins) {
+    Serial.println(command_);
   }
  private:
   const char *command_;
 };
 
+#if 0
 class HoldButton : public Input {
  public:
   HoldButton(int pin, int hold_time_ms, const char *edge_command, const char *hold_command) :
@@ -105,6 +94,7 @@ class HoldButton : public Input {
   const char *edge_command_;
   const char *hold_command_;
 };
+#endif
 
 class Encoder : public Input {
  public:
@@ -113,81 +103,128 @@ class Encoder : public Input {
       left_command_(left_command),
       right_command_(right_command) {}
 
-  virtual void edge(int pin, int val) {
-    Serial.println(left_command_);
-    Serial.println(pins_[pin]);
-    Serial.println(last_[0]);
-    Serial.println(last_[1]);
-    Serial.println();
-    if (last_[0] == last_[1]) return;
-    if (pin == 0) {
-      //Serial.println(left_command_);
+  virtual void edge(unsigned int changed_pins) {
+    unsigned int pin_states = io_->digitalReadPins();
+    bool a_val = pin_states & pin_0_mask_;
+    bool b_val = pin_states & pin_1_mask_;
+
+    if (a_val == b_val) return;
+    
+
+    if (changed_pins & pin_0_mask_) {
+      Serial.println(left_command_);
     } else {
-      //Serial.println(right_command_);
+      Serial.println(right_command_);
     }
   }
 
+  virtual byte edge_trigger_mode() { return CHANGE; }
  private:
   const char *left_command_;
   const char *right_command_;
 };
 
+#define PIN_CASE(pin) \
+    case 1 << pin:\
+      pin_to_input_[pin]->edge(changed_pins);\
+      break;
+
+
+
 class Expander {
  public:
-  Expander(const byte i2c_address, interrupt_pin, Input* inputs[], int num_inputs) :
+  Expander(const byte i2c_address, int interrupt_pin, void (*isr)(), Input* inputs[], int num_inputs) :
       i2c_address_(i2c_address),
       interrupt_pin_(interrupt_pin),
+      isr_(isr),
       num_inputs_(num_inputs < MAX_INPUTS ? num_inputs : MAX_INPUTS) {
     pinMode(interrupt_pin_, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(interrupt_pin_), 
-                  button, FALLING);
+                  isr_, FALLING);
     if (!io_.begin(i2c_address_))
     {
       Serial.print("Failed to init SX1509 at ");
       Serial.print(i2c_address_);
     }
 
+    memset(pin_to_input_, NULL, sizeof(pin_to_input_[0]) * MAX_INPUTS);
     for (int i = 0; i < num_inputs_; ++i) {
       inputs_[i] = inputs[i];
+      for (int j = 0; j < MAX_INPUT_PINS; ++j) {
+        int pin = inputs_[i]->pins_[j];
+        if (pin == -1) continue;
+        pin_to_input_[pin] = inputs[i];
+      }
       inputs_[i]->initialize(&io_);
     }
+    io_.debounceTime(1);
+    
+    
   }
 
   void scan() {
-    for (int i = 0; i < num_inputs_; ++i) {
-      inputs_[i]->scan();
+    if (interrupt_pending_) {
+      interrupt_pending_ = false;
+      unsigned int changed_pins = io_.interruptSource();
+      switch(changed_pins) {
+        PIN_CASE(0)
+        PIN_CASE(1)
+        PIN_CASE(2)
+        PIN_CASE(3)
+        PIN_CASE(4)
+        PIN_CASE(5)
+        PIN_CASE(6)
+        PIN_CASE(7)
+        PIN_CASE(8)
+        PIN_CASE(9)
+        PIN_CASE(10)
+        PIN_CASE(11)
+        PIN_CASE(12)
+        PIN_CASE(13)
+        PIN_CASE(14)
+        PIN_CASE(15)
+      }
     }
   }
+
+  void set_interrupt() {
+    interrupt_pending_ = true;
+  }
+
  private:
   const byte i2c_address_;
   int interrupt_pin_;
+  void (*isr_)();
   SX1509 io_;
   Input* inputs_[MAX_INPUTS];
+  Input* pin_to_input_[MAX_INPUTS];
   int num_inputs_;
+  bool interrupt_pending_;
 };
-
-void isr(Expander *expander) {
-  expander->set_interrupt();
-}
 
 
 Expander* expanders[EXPANDER_COUNT];
 
 void isr_0() {
-  isr(expanders[0]);
+  expanders[0]->set_interrupt();
+}
+
+void isr_1() {
+  expanders[1]->set_interrupt();
 }
 
 void setup() 
 {
   Serial.begin(9600);
-#if 0
+
   Input* inputs_0[] = {
      new Button(0, "ENT"),
      new Button(1, "MENU"),
      new Button(2, "RNG_UP"),
      new Button(3, "RNG_DN"),
      new Button(4, "DIRECT"),
-     new HoldButton(5, 1000, "CLR", "CLR_HOLD"),
+     //new HoldButton(5, 1000, "CLR", "CLR_HOLD"),
+     new Button(5, "CLR"),
      new Button(6, "COM_TRANS"),
      new Button(7, "COM_TRANS"),
      new Button(8, "CDI"),
@@ -195,9 +232,10 @@ void setup()
      new Button(10, "MSG"),
      new Button(11, "FPL"),
      new Button(12, "PROC"),
+     new Encoder(14, 15, "FREQ_LARGE_DECR", "FREQ_LARGE_INCR"),
   };
-  expanders[0] = new Expander(0x3E, inputs_0, 13);
-#endif
+  expanders[0] = new Expander(0x3E, 2, isr_0, inputs_0, 14);
+#if 0
   Input* inputs_1[] = {
      new Encoder(0, 1, "FREQ_LARGE_DECR", "FREQ_LARGE_INCR"),
      new Encoder(2, 3, "FREQ_SMALL_DECR", "FREQ_SMALL_INCR"),
@@ -206,8 +244,8 @@ void setup()
      new Encoder(7, 8, "FMS_SMALL_DECR", "FMS_SMALL_INCR"),
      new Button(9, "FMS_PUSH"),
   };
-  expanders[0] = new Expander(0x3F, inputs_1, 6);
-
+  expanders[1] = new Expander(0x3F, 3, isr_1, inputs_1, 6);
+#endif
 }
 
 void loop() 
