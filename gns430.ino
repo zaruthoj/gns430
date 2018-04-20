@@ -1,7 +1,7 @@
 #include <Wire.h>
 #include <SparkFunSX1509.h>
 
-#define EXPANDER_COUNT 1
+#define EXPANDER_COUNT 2
 
 #define MAX_INPUT_PINS 2
 #define MAX_INPUTS 16
@@ -21,21 +21,26 @@ class Input {
     for (int i = 0; i < MAX_INPUT_PINS; ++i) {
       if (pins_[i] != -1) {
         io_->pinMode(pins_[i], INPUT_PULLUP);
-        io_->debouncePin(pins_[i]);
-        io_->debounceConfig(011);
+        //io_->debouncePin(pins_[i]);
+        //io_->debounceConfig(0);
       }
     }
   }
 
   void scan() {
     bool changed_pins[] = {false, false};
-    int val = io_->digitalRead(pins_[0]);
-    changed_pins[0] = val != last_[0];
-    last_[0] = val;
- 
-    val = io_->digitalRead(pins_[1]);
-    changed_pins[1] = val != last_[1];
-    last_[1] = val;
+    int val;
+    if (pins_[0] > 0) {
+      val = io_->digitalRead(pins_[0]);
+      changed_pins[0] = val != last_[0];
+      last_[0] = val;
+    }
+
+    if (pins_[1] > 0) {
+      val = io_->digitalRead(pins_[1]);
+      changed_pins[1] = val != last_[1];
+      last_[1] = val;
+    }
 
     changed_pins[0] ? edge(0, last_[0]) : repeat(0, last_[0]);
     changed_pins[1] ? edge(1, last_[1]) : repeat(1, last_[1]);
@@ -107,11 +112,16 @@ class Encoder : public Input {
       right_command_(right_command) {}
 
   virtual void edge(int pin, int val) {
+    Serial.println(left_command_);
+    Serial.println(pins_[pin]);
+    Serial.println(last_[0]);
+    Serial.println(last_[1]);
+    Serial.println();
     if (last_[0] == last_[1]) return;
     if (pin == 0) {
-      Serial.println(left_command_);
+      //Serial.println(left_command_);
     } else {
-      Serial.println(right_command_);
+      //Serial.println(right_command_);
     }
   }
 
@@ -150,9 +160,65 @@ class Expander {
 };
 
 Expander* expanders[EXPANDER_COUNT];
+
+SX1509 io;
+class TestEncoder {
+public:
+  TestEncoder(int pin_a, int pin_b) :
+      pin_a_(pin_a),
+      pin_b_(pin_b),
+      last_a_(HIGH),
+      last_b_(HIGH) {
+  }
+
+  void scan() {
+    int val_a = io.digitalRead(pin_a_);
+    int val_b = io.digitalRead(pin_b_);
+    
+    
+    int pin = -1;
+    int val = HIGH;
+    if (val_a != last_a_) {
+      //Serial.print("A");
+      //Serial.println(val_a);
+      pin = pin_a_;
+      val = val_a;
+    } else if (val_b != last_b_) {
+      //Serial.print("B");
+      //Serial.println(val_b);  
+      pin = pin_b_;
+      val = val_b;
+    }
+    
+    last_a_ = val_a;
+    last_b_ = val_b;
+
+    if (pin == -1) {
+      return;
+    }
+    //Serial.println();
+    if (val_a == val_b) return;
+    if (pin == pin_a_) {
+      Serial.println("left");
+    } else {
+      Serial.println("right");
+    }
+  }
+
+protected:
+
+  int pin_a_;
+  int pin_b_;
+  int last_a_;
+  int last_b_;
+};
+
+
+TestEncoder encoder(0, 1);
 void setup() 
 {
   Serial.begin(9600);
+#if 0
   Input* inputs_0[] = {
      new Button(0, "ENT"),
      new Button(1, "MENU"),
@@ -179,11 +245,19 @@ void setup()
      new Button(9, "FMS_PUSH"),
   };
   expanders[1] = new Expander(0x3F, inputs_1, 6);
+#endif
+  
+  io.begin(0x3F);
+  io.pinMode(0, INPUT_PULLUP);
+  io.pinMode(1, INPUT_PULLUP);
 }
 
 void loop() 
 {
+#if 0
   for(int i = 0; i < EXPANDER_COUNT; ++i) {
     expanders[i]->scan();
   }
+#endif
+  encoder.scan();
 }
