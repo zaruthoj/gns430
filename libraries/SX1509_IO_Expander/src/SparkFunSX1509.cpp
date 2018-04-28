@@ -599,6 +599,20 @@ bool SX1509::checkInterrupt(int pin)
 	return false;
 }
 
+void SX1509::interruptData(unsigned int *interrupt_status, unsigned int *pin_status, bool clear /* = true */) {
+	byte data[REG_INTERRUPT_SOURCE_A - REG_DATA_B + 1];
+	readBytes(REG_DATA_B, data, REG_INTERRUPT_SOURCE_A - REG_DATA_B + 1 );
+	*pin_status = (unsigned int)data[0] << 8 | data[1];
+	Serial.print(data[0]);
+	Serial.print(":");
+	Serial.print(data[1]);
+	Serial.print(", ");
+	Serial.println(*pin_status);
+	*interrupt_status = (unsigned int)data[REG_INTERRUPT_SOURCE_B - REG_DATA_B] << 8 | data[REG_INTERRUPT_SOURCE_A - REG_DATA_B];
+	if (clear)
+		writeWord(REG_INTERRUPT_SOURCE_B, 0xFFFF);
+}
+
 void SX1509::clock(byte oscSource, byte oscDivider, byte oscPinFunction, byte oscFreqOut)
 {
 	configClock(oscSource, oscPinFunction, oscFreqOut, oscDivider);

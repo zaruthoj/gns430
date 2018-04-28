@@ -398,6 +398,8 @@ public:
 // -----------------------------------------------------------------------------
 	unsigned int interruptSource(bool clear = true);
 
+	void interruptData(unsigned int *interrupt_status, unsigned int *pin_status, bool clear = true);
+
 // -----------------------------------------------------------------------------
 // checkInterrupt(void): Checks if a single pin generated an interrupt.
 //

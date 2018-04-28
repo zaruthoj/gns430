@@ -234,7 +234,7 @@ void setup()
      new Button(2, "RNG_UP"),
      new Button(3, "RNG_DN"),
      new Button(4, "DIRECT"),
-     new HoldButton(5, 1000, "CLR", "CLR_HOLD"),
+     clear_button,
      new Button(6, "COM_TRANS"),
      new Button(7, "COM_TRANS"),
      new Button(8, "CDI"),
