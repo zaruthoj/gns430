@@ -1,7 +1,14 @@
+//#define AM
+
 #include <movingAvg.h>
 
 #include <Wire.h>
 #include <SparkFunSX1509.h>
+
+#ifdef AM
+#include <si_message_port.hpp>
+SiMessagePort* messagePort;
+#endif
 
 #define EXPANDER_COUNT 2
 
@@ -9,38 +16,36 @@
 #define MAX_INPUTS 16
 #define SERIAL_BUF_SIZE 80
 
-class SerialControl {
- public:
-  virtual void send_control(uint8_t data=1) = 0;
-};
-
-class Control : public SerialControl {
- public:
-  Control(const char *offset) : offset_(offset) {}
-
-  void send_control(uint8_t data=1) {
-    Serial.print("C|");
-    Serial.print(offset_);
-    Serial.print("|N|");
-    Serial.println(data);
-  }
- private:
-  const char *offset_;
-};
-
-class Keypress : public SerialControl {
- public:
-  Keypress(const char* key, const char* keyshift) : key_(key), keyshift_(keyshift) {}
-
-  void send_control(uint8_t data=1) {
-    Serial.print("K|");
-    Serial.print(key_);
-    Serial.print("|N|");
-    Serial.println(keyshift_);
-  }
- private:
-  const char* key_;
-  const char* keyshift_;
+enum Events {
+  GPS_POWER_BUTTON = 1,
+  GPS_CDI_BUTTON, // GPS_NEAREST_BUTTON
+  GPS_OBS_BUTTON,
+  GPS_MSG_BUTTON,
+  GPS_MSG_BUTTON_DOWN,
+  GPS_MSG_BUTTON_UP,
+  GPS_FLIGHTPLAN_BUTTON,
+  GPS_PROCEDURE_BUTTON,
+  GPS_ZOOMIN_BUTTON,
+  GPS_ZOOMOUT_BUTTON,
+  GPS_DIRECTTO_BUTTON,
+  GPS_MENU_BUTTON,
+  GPS_CLEAR_BUTTON_DOWN,
+  GPS_CLEAR_BUTTON_UP,
+  GPS_ENTER_BUTTON,
+  GPS_NAV_ID_TOGGLE, // GPS_ACTIVATE_BUTTON
+  GPS_CURSOR_BUTTON,
+  GPS_GROUP_KNOB_INC,
+  GPS_GROUP_KNOB_DEC,
+  GPS_PAGE_KNOB_INC,
+  GPS_PAGE_KNOB_DEC,
+  FREQ_TOGGLE,    // GPS_BUTTON1
+  FREQ_WHOLE_INC, // GPS_BUTTON2
+  FREQ_WHOLE_DEC, // GPS_BUTTON3
+  FREQ_FRAC_INC,  // GPS_BUTTON4
+  FREQ_FRAC_DEC,  // GPS_BUTTON5
+  RADIO_VOR1_IDENT_TOGGLE,
+  COM_RADIO_SWAP,
+  NAV1_RADIO_SWAP,
 };
 
 class Input {
@@ -81,13 +86,22 @@ class Input {
   int last_[MAX_INPUT_PINS];
 };
 
+inline void send_command(const char *command, uint16_t message, int8_t data) {
+#ifdef AM
+  messagePort->SendMessage(message, (uint8_t)data);
+#else
+  Serial.println(command);
+#endif
+}
 
 class Encoder : public Input {
  public:
-  Encoder(int pin_a, int pin_b, SerialControl *left_command, SerialControl *right_command) :
+  Encoder(int pin_a, int pin_b, const char *left_command, const char *right_command, uint16_t left_message, uint16_t right_message) :
       Input(pin_a, pin_b),
       left_command_(left_command),
       right_command_(right_command),
+      left_message_(left_message),
+      right_message_(right_message),
       a_val_(0),
       b_val_(0) {}
 
@@ -105,9 +119,9 @@ class Encoder : public Input {
     if (a_val_ == b_val_) return;
 
     if (changed_pins & pin_0_mask_) {
-      left_command_->send_control();
+      send_command(left_command_, left_message_, 0);
     } else {
-      right_command_->send_control();
+      send_command(right_command_, right_message_, 0);
     }
   }
 
@@ -118,8 +132,11 @@ class Encoder : public Input {
     b_val_ = io_->digitalRead(pins_[1]);
   }
  private:
-  SerialControl *left_command_;
-  SerialControl *right_command_;
+  const char *left_command_;
+  const char *right_command_;
+  uint16_t left_message_;
+  uint16_t right_message_;
+  
   bool a_val_;
   bool b_val_;
 };
@@ -138,51 +155,61 @@ void scan_encoders() {
 
 class Button : public Input {
  public:
-  Button(int pin, SerialControl *command) :
+  Button(int pin, const char *command, uint16_t message) :
       Input(pin, -1),
-      command_(command) {     
+      command_(command),
+      message_(message) {     
   }
 
   virtual void edge(unsigned int changed_pins) {
-    command_->send_control();
+    send_command(command_, message_, 0);
     scan_encoders();
   }
  private:
-  SerialControl *command_;
+  const char *command_;
+  uint16_t message_;
 };
 
 class Toggle : public Input {
  public:
-  Toggle(int pin, SerialControl *command, int active) :
+  Toggle(int pin, const char *command, uint16_t message, int active) :
       Input(pin, -1),
       command_(command),
+      message_(message),
       active_(active) {     
   }
 
   virtual void edge(unsigned int changed_pins) {
-    command_->send_control(io_->digitalRead(pins_[0]) == active_);
+    if (io_->digitalRead(pins_[0]) == active_) {
+      send_command(command_, message_, 1);
+    } else {
+      send_command(command_, message_, 0);
+    }
     scan_encoders();
   }
 
   virtual byte edge_trigger_mode() { return CHANGE; }
  private:
-  SerialControl *command_;
+  const char *command_;
+  uint16_t message_;
   const int active_;
 };
 
 class HoldButton : public Input {
  public:
-  HoldButton(int pin, int down_command, int up_command) :
+  HoldButton(int pin, const char* down_command, const char* up_command, uint16_t down_message, uint16_t up_message) :
       Input(pin, -1),
       down_command_(down_command),
-      up_command_(up_command) {     
+      up_command_(up_command),
+      up_message_(up_message),
+      down_message_(down_message) {     
   }
 
   virtual void edge(unsigned int changed_pins) {
     if (io_->digitalRead(pins_[0]) == LOW) {
-      down_command_->send_control();
+      send_command(down_command_, down_message_, 0);
     } else {
-      up_command_->send_control();
+      send_command(up_command_, up_message_, 0);
     }
     scan_encoders();
   }
@@ -190,8 +217,10 @@ class HoldButton : public Input {
   virtual byte edge_trigger_mode() { return CHANGE; }
 
  private:
-  SerialControl *up_command_;
-  SerialControl *down_command_;
+  const char *up_command_;
+  const char *down_command_;
+  uint16_t up_message_;
+  uint16_t down_message_;
 };
 
 #define PIN_CASE(pin) \
@@ -216,7 +245,7 @@ class Expander {
       Serial.print("Failed to init SX1509 at ");
       Serial.print(i2c_address_);
     }
-    io_.debounceTime(2);
+    io_.debounceTime(1);
 
     memset(pin_to_input_, NULL, sizeof(pin_to_input_[0]) * MAX_INPUTS);
     for (int i = 0; i < num_inputs_; ++i) {
@@ -309,6 +338,12 @@ class Potentiometer {
   char *command_;
 };
 
+#ifdef AM
+static void new_message_callback(uint16_t message_id, struct SiMessagePortPayload* payload) {
+  // noop
+}
+#endif
+
 Potentiometer* com_volume;
 Potentiometer* nav_volume;
 Toggle* id_toggle;
@@ -317,40 +352,44 @@ Toggle* power_toggle;
 void setup() 
 {
   ADCSRA = (ADCSRA & B11111000) | 4;
+#ifdef AM
+  messagePort = new SiMessagePort(SI_MESSAGE_PORT_DEVICE_ARDUINO_NANO, SI_MESSAGE_PORT_CHANNEL_C, new_message_callback);
+#else
   Serial.begin(115200);
+#endif
 
-  freq_small = new Encoder(0, 1, new Control("66632"), new Control("66633"));//"FSI", "FSD");
-  freq_large = new Encoder(2, 3, new Control("66631"), new Control("66630"));//"FLD", "FLI");
-  fms_small = new Encoder(4, 5, new Control("66627"), new Control("66628"));//"GSI", "GSD");
-  fms_large = new Encoder(6, 7, new Control("66626"), new Control("66625"));//"GLD", "GLI");
-  id_toggle = new Toggle(4, new Control("66614"), HIGH);
-  power_toggle = new Toggle(12, new Control("66602"), LOW);
+  freq_small = new Encoder(0, 1, "FSI", "FSD", FREQ_FRAC_INC, FREQ_FRAC_DEC);
+  freq_large = new Encoder(2, 3, "FLD", "FLI", FREQ_WHOLE_DEC, FREQ_WHOLE_INC);
+  fms_small = new Encoder(4, 5, "GSI", "GSD", GPS_PAGE_KNOB_INC, GPS_PAGE_KNOB_DEC);
+  fms_large = new Encoder(6, 7, "GLD", "GLI", GPS_GROUP_KNOB_DEC, GPS_GROUP_KNOB_INC);
+  id_toggle = new Toggle(4, "ID", GPS_NAV_ID_TOGGLE, HIGH);
+  //power_toggle = new Toggle(12, "POWER", LOW);
   Input* inputs_0[] = {
      freq_small,
      freq_large,
      id_toggle,
-     new Button(5, new Control("66606")), // "MSG"),
-     new Button(6, new Control("66609")), // "FPL"),
-     new Button(7, new Control("66612")), // "PROC"),
-     new Button(10, new Control("66605")), // "OBS"),
-     new Button(11, new Control("66604")), // "CDI"),
+     new Button(5, "MSG", GPS_MSG_BUTTON),
+     new Button(6, "FPL", GPS_FLIGHTPLAN_BUTTON),
+     new Button(7, "PROC", GPS_PROCEDURE_BUTTON),
+     new Button(10, "OBS", GPS_OBS_BUTTON),
+     new Button(11, "CDI", GPS_CDI_BUTTON),
      power_toggle,
-     new Button(13, new Keypress("67", "43")), // "COM_TRANS"),
-     new Button(14, new Keypress("86", "43")), // "NAV_TRANS"),
-     new Button(15, new Control("66629")), // "FREQ_TOGGLE"),
+     new Button(13, "COM_TRANS", COM_RADIO_SWAP),
+     new Button(14, "NAV_TRANS", NAV1_RADIO_SWAP),
+     new Button(15, "FREQ_TOGGLE", FREQ_TOGGLE),
   };
   expanders[0] = new Expander(0x3E, 2, isr_0, inputs_0, 12);
 
   Input* inputs_1[] = {
-     new Button(0, new Control("66624")), // "CURSOR"),
+     new Button(0, "CURSOR", GPS_CURSOR_BUTTON),
      fms_small,
      fms_large,
-     new Button(10, new Control("66615")), // "RNG_DN"),
-     new Button(11, new Control("66616")), // "RNG_UP"),
-     new Button(12, new Control("66618")), // "MENU"),
-     new Button(13, new Control("66623")), // "ENT"),
-     new Button(14, new Control("66617")), // "DIRECT"),
-     new HoldButton(15, new Control("66621"), new Control("66622")), // "CLR_DN", "CLR_UP"),
+     new Button(10, "RNG_DN", GPS_ZOOMIN_BUTTON),
+     new Button(11, "RNG_UP", GPS_ZOOMOUT_BUTTON),
+     new Button(12, "MENU", GPS_MENU_BUTTON),
+     new Button(13, "ENT", GPS_ENTER_BUTTON),
+     new Button(14, "DIRECT", GPS_DIRECTTO_BUTTON),
+     new HoldButton(15, "CLR_DN", "CLR_UP", GPS_CLEAR_BUTTON_DOWN, GPS_CLEAR_BUTTON_UP),
   };
   expanders[1] = new Expander(0x3F, 3, isr_1, inputs_1, 9);
 
@@ -358,23 +397,25 @@ void setup()
   //nav_volume = new Potentiometer(0, 2, "NAV_VOL:");
 }
 
-uint32_t last_slow_scan = 0;
-uint32_t last_heartbeat = 0;
-uint32_t last_watchdog = 0;
+int last_slow_scan = 0;
+int last_heartbeat = 0;
+char serial_buffer[SERIAL_BUF_SIZE];
+int serial_pos = 0;
 void loop() 
 {
   expanders[0]->scan();
   expanders[1]->scan();
-
-  uint32_t now = millis();
-  if (now > last_watchdog + 1000) {
-    last_watchdog = now;
-    Serial.println("P3DGNS");  
-  } 
-  #if 0
+  
   int milliseconds = millis();
+#ifdef AM
+  messagePort->Tick();
+#endif
+
+#if 0
   if (milliseconds - last_slow_scan > 50) {
     last_slow_scan = milliseconds;
+
+
     bool heartbeat = milliseconds - last_heartbeat > 30000;
     //com_volume->scan(heartbeat);
     //nav_volume->scan(heartbeat);
@@ -389,5 +430,23 @@ void loop()
     fms_small->scan();
     fms_large->scan();
   }
-  #endif
+  if (Serial.available() > 0) {
+    if (serial_pos >= SERIAL_BUF_SIZE) {
+      serial_pos = 0;
+    }
+    serial_buffer[serial_pos] = Serial.read();
+
+    switch(serial_buffer[serial_pos]) {
+      case '\n':
+        serial_buffer[serial_pos] = '\0';
+        if (strncmp(serial_buffer, "ID", 2) == 0) {
+          Serial.println("GNS430:1");
+        }
+        break;
+      default:
+        break;
+    }
+    serial_pos++;
+  }
+#endif
 }
